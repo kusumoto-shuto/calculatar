@@ -1,12 +1,12 @@
 import flet as ft
 import requests
 import datetime
+import json
 
 # 気象庁のAPIのエンドポイント
 AREA_CODE_URL = "http://www.jma.go.jp/bosai/common/const/area.json"
 FORECAST_URL = "https://www.jma.go.jp/bosai/forecast/data/forecast/{}.json"
 
-# 地域リストの取得
 def get_area_list():
     try:
         response = requests.get(AREA_CODE_URL)
@@ -18,7 +18,6 @@ def get_area_list():
         print(f"An error occurred: {err}")
     return None
 
-# 天気予報の取得
 def get_weather_forecast(area_code):
     try:
         url = FORECAST_URL.format(area_code)
@@ -31,72 +30,82 @@ def get_weather_forecast(area_code):
         print(f"An error occurred: {err}")
     return None
 
+def save_debug_data(data, filename="weather_data_debug.json"):
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+        print(f"デバッグ情報をファイル '{filename}' に保存しました。")
+    except Exception as e:
+        print(f"データ保存中にエラーが発生しました: {e}")
+
 def main(page: ft.Page):
     page.title = "天気予報アプリ"
     page.vertical_alignment = ft.MainAxisAlignment.START
-    
-    # 地域リストを取得
+
     area_list = get_area_list()
     if not area_list:
         return
-    
-    # 地域一覧オプションを作成
+
     area_options = [
         ft.dropdown.Option(str(code), info["name"])
         for code, info in area_list.get("offices", {}).items()
     ]
 
-    # ドロップダウンリスト
     area_dropdown = ft.Dropdown(
-        options=area_options, 
+        options=area_options,
         label="地域を選択",
         on_change=lambda e: on_area_change(e.control.value)
     )
 
-    # 天気表示エリア
-    weather_text = ft.Text("", size=14, width=400)
+    weather_text = ft.Column(width=400)
 
-    # 天気情報を取得してUIに表示する関数
     def display_weather(area_code):
         weather_data = get_weather_forecast(area_code)
         if weather_data and len(weather_data) > 0:
             try:
-                # 最初の timeSeries は天気と風の情報を持つ
+                weather_text.controls.clear()
+                
+                # デバッグ用にweather_dataをファイルに保存
+                save_debug_data(weather_data)
+
+                dates = weather_data[0]["timeSeries"][0]["timeDefines"]
                 weather_info = weather_data[0]["timeSeries"][0]["areas"][0]
-                # 時系列2に温度データが含まれている場合
-                temp_info_section = [ts for ts in weather_data[0]["timeSeries"] if 'temps' in ts["areas"][0]]
+                weathers = weather_info["weathers"]
+                winds = weather_info["winds"]
+
+                temp_info_section = next((ts for ts in weather_data[0]["timeSeries"] if 'temps' in ts["areas"][0]), None)
+                max_temps = min_temps = ["データ未取得"] * len(dates)
                 if temp_info_section:
-                    temp_info = temp_info_section[0]["areas"][0]
-                    max_temp = temp_info['temps'][1] if len(temp_info['temps']) > 1 else "データ未取得"
-                    min_temp = temp_info['temps'][0] if len(temp_info['temps']) > 0 else "データ未取得"
-                else:
-                    max_temp, min_temp = "データ未取得", "データ未取得"
+                    temps = temp_info_section["areas"][0]["temps"]
+                    max_temps = temps[1::2]
+                    min_temps = temps[0::2]
 
-                # 日付の情報を取得
-                report_datetime = weather_data[0]["reportDatetime"]
-                date = datetime.datetime.fromisoformat(report_datetime).strftime('%Y-%m-%d')
+                # 日付の数をチェックしながら天気情報を表示
+                for i in range(min(len(dates), 4)):  # 次の日から3日後まで
+                    if i < len(dates):
+                        date_str = datetime.datetime.fromisoformat(dates[i]).strftime('%Y-%m-%d')
+                        weather = weathers[i] if i < len(weathers) else "データ未取得"
+                        wind = winds[i] if i < len(winds) else "データ未取得"
+                        max_temp = max_temps[i] if i < len(max_temps) else "データ未取得"
+                        min_temp = min_temps[i] if i < len(min_temps) else "データ未取得"
 
-                # 天気情報のテキスト表示を更新
-                weather_text.value = (
-                    f"地域: {weather_info['area']['name']}\n"
-                    f"日付: {date}\n"
-                    f"天気: {weather_info['weathers'][0]}\n"
-                    f"風: {weather_info['winds'][0]}\n"
-                    f"最高気温: {max_temp}°C\n"
-                    f"最低気温: {min_temp}°C\n"
-                )
+                        weather_text.controls.append(ft.Text(
+                            f"日付: {date_str}\n"
+                            f"天気: {weather}\n"
+                            f"風: {wind}\n"
+                            f"最高気温: {max_temp}\n"
+                            f"最低気温: {min_temp}\n"
+                        ))
+
             except (IndexError, KeyError) as e:
-                weather_text.value = "天気情報の解析中にエラーが発生しました。"
+                weather_text.controls.append(ft.Text(f"天気情報の解析中にエラーが発生しました: {e}"))
         else:
-            weather_text.value = "天気情報が取得できませんでした。"
+            weather_text.controls.append(ft.Text("天気情報が取得できませんでした。"))
         page.update()
 
-    # 地域が変更されたときのイベントハンドラ
     def on_area_change(area_code):
         display_weather(area_code)
 
-    # ページにコンポーネントを追加
     page.add(area_dropdown, weather_text)
 
-# アプリケーションの実行
 ft.app(target=main)
